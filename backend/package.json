@@ -1,0 +1,15 @@
+{
+  "name": "recap-mail-ai-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "latest",
+    "dotenv": "latest",
+    "express": "latest",
+    "multer": "latest",
+    "openai": "latest"
+  }
+}
