@@ -117,6 +117,25 @@ function setTranscriptionStatus(text, done = false) {
   fields.transcriptionStatus.classList.toggle('done', done);
 }
 
+function removeListeningMarker(value, label) {
+  return String(value || '').replace(new RegExp(`\n?\\[${label}:.*?\\]$`, 's'), '').trim();
+}
+
+function normalizeSpeechText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function buildSpeechDraft(baseText, finalText, interimText, label) {
+  const parts = [];
+  const base = normalizeSpeechText(baseText);
+  const final = normalizeSpeechText(finalText);
+  const interim = normalizeSpeechText(interimText);
+  if (base) parts.push(base);
+  if (final) parts.push(final);
+  if (interim) parts.push(`[${label}: ${interim}]`);
+  return parts.join('\n').trim();
+}
+
 function formatDateHuman(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -481,16 +500,26 @@ function setupLiveTranscription() {
   state.recognition.continuous = true;
   state.recognition.interimResults = true;
 
-  let committed = '';
   state.recognition.onresult = (event) => {
-    let interim = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) committed += transcript.trim() + '. ';
-      else interim += transcript;
+    const finalParts = [];
+    const interimParts = [];
+
+    // Importante: non accodiamo ogni volta al campo esistente.
+    // Chrome/Android rimanda spesso anche parti già riconosciute: se le accodiamo,
+    // la frase viene duplicata molte volte. Qui ricostruiamo sempre il testo della sessione.
+    for (let i = 0; i < event.results.length; i++) {
+      const transcript = normalizeSpeechText(event.results[i][0].transcript);
+      if (!transcript) continue;
+      if (event.results[i].isFinal) finalParts.push(transcript);
+      else interimParts.push(transcript);
     }
-    const base = fields.transcriptDraft.value.replace(/\n?\[In ascolto:.*?\]$/s, '').trim();
-    fields.transcriptDraft.value = `${base ? `${base}\n` : ''}${committed.trim()}${interim ? `\n[In ascolto: ${interim}]` : ''}`.trim();
+
+    fields.transcriptDraft.value = buildSpeechDraft(
+      state.liveBase || '',
+      finalParts.join(' '),
+      interimParts.join(' '),
+      'In ascolto'
+    );
   };
 
   state.recognition.onerror = () => {
@@ -499,14 +528,18 @@ function setupLiveTranscription() {
   };
 
   state.recognition.onend = () => {
+    fields.transcriptDraft.value = removeListeningMarker(fields.transcriptDraft.value, 'In ascolto');
+
     if (state.listening) {
+      // Quando Android chiude automaticamente la sessione, salviamo quanto trascritto
+      // come base e ripartiamo senza riscrivere le stesse frasi.
+      state.liveBase = fields.transcriptDraft.value.trim();
       try {
         state.recognition.start();
         return;
       } catch (_) {}
     }
-    fields.transcriptDraft.value = fields.transcriptDraft.value.replace(/\n?\[In ascolto:.*?\]$/s, '').trim();
-    committed = '';
+
     $('startLiveBtn').disabled = false;
     $('stopLiveBtn').disabled = true;
     setTranscriptionStatus('Fermata');
@@ -519,6 +552,7 @@ function startLiveTranscription() {
   if (!ok) return;
   try {
     saveSettings();
+    state.liveBase = removeListeningMarker(fields.transcriptDraft.value, 'In ascolto');
     state.listening = true;
     state.recognition.start();
     $('startLiveBtn').disabled = true;
@@ -536,7 +570,8 @@ function stopLiveTranscription() {
   try { state.recognition.stop(); } catch (_) {}
   $('startLiveBtn').disabled = false;
   $('stopLiveBtn').disabled = true;
-  fields.transcriptDraft.value = fields.transcriptDraft.value.replace(/\n?\[In ascolto:.*?\]$/s, '').trim();
+  fields.transcriptDraft.value = removeListeningMarker(fields.transcriptDraft.value, 'In ascolto');
+  state.liveBase = fields.transcriptDraft.value.trim();
   setTranscriptionStatus('Fermata');
 }
 
@@ -554,33 +589,59 @@ function setupQuickSpeech() {
   state.quickRecognition.continuous = true;
   state.quickRecognition.interimResults = true;
 
-  let finalTranscript = '';
   state.quickRecognition.onresult = (event) => {
-    let interim = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) finalTranscript += transcript + ' ';
-      else interim += transcript;
+    const finalParts = [];
+    const interimParts = [];
+
+    // Non usare fields.notes.value come base ad ogni risultato: su Android crea ripetizioni.
+    // Ricostruiamo la sessione corrente partendo dalla base salvata quando premi il microfono.
+    for (let i = 0; i < event.results.length; i++) {
+      const transcript = normalizeSpeechText(event.results[i][0].transcript);
+      if (!transcript) continue;
+      if (event.results[i].isFinal) finalParts.push(transcript);
+      else interimParts.push(transcript);
     }
-    fields.notes.value = `${fields.notes.value.replace(/\n?\[Dettatura in corso:.*?\]$/s, '').trim()}\n${finalTranscript.trim()}${interim ? `\n[Dettatura in corso: ${interim}]` : ''}`.trim();
+
+    fields.notes.value = buildSpeechDraft(
+      state.quickBase || '',
+      finalParts.join(' '),
+      interimParts.join(' '),
+      'Dettatura in corso'
+    );
+    updatePrompt();
   };
 
   state.quickRecognition.onend = () => {
     state.quickListening = false;
     micBtn.textContent = '🎙️ Dettatura rapida';
-    fields.notes.value = fields.notes.value.replace(/\n?\[Dettatura in corso:.*?\]$/s, '').trim();
-    finalTranscript = '';
+    fields.notes.value = removeListeningMarker(fields.notes.value, 'Dettatura in corso');
+    state.quickBase = fields.notes.value.trim();
+    updatePrompt();
+  };
+
+  state.quickRecognition.onerror = () => {
+    state.quickListening = false;
+    micBtn.textContent = '🎙️ Dettatura rapida';
+    fields.notes.value = removeListeningMarker(fields.notes.value, 'Dettatura in corso');
+    toast('Problema con la dettatura o permesso microfono negato.');
   };
 
   micBtn.addEventListener('click', () => {
     if (!state.quickListening) {
       const ok = confirm('Avvia la dettatura solo se la conversazione è autorizzata e nel rispetto della privacy. Continuare?');
       if (!ok) return;
+      state.quickBase = removeListeningMarker(fields.notes.value, 'Dettatura in corso');
       state.quickListening = true;
       micBtn.textContent = '⏹️ Ferma';
-      state.quickRecognition.start();
+      try {
+        state.quickRecognition.start();
+      } catch (_) {
+        state.quickListening = false;
+        micBtn.textContent = '🎙️ Dettatura rapida';
+        toast('Non riesco ad avviare la dettatura.');
+      }
     } else {
-      state.quickRecognition.stop();
+      try { state.quickRecognition.stop(); } catch (_) {}
     }
   });
 }

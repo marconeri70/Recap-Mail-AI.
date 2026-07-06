@@ -1,4 +1,4 @@
-const CACHE_NAME = 'recap-mail-ai-v2';
+const CACHE_NAME = 'recap-mail-ai-v3';
 const ASSETS = [
   './',
   './index.html',
