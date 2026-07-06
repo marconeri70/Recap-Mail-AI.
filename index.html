@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>Recap Mail AI - Email di riepilogo</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Recap Mail AI</p>
+      <h1>Trasforma conversazioni, telefonate e meeting in email di recap.</h1>
+      <p class="subtitle">Una traccia scritta chiara per decisioni, impegni, scadenze e punti aperti.</p>
+    </div>
+    <button id="installBtn" class="ghost hidden" type="button">Installa app</button>
+  </header>
+
+  <main class="layout">
+    <section class="panel form-panel" aria-label="Dati recap">
+      <div class="notice">
+        <strong>Nota importante:</strong> usa trascrizioni o registrazioni solo se autorizzate e nel rispetto della privacy. L'app funziona in locale e non invia dati a server esterni.
+      </div>
+
+      <div class="grid two">
+        <label>
+          Tipo conversazione
+          <select id="meetingType">
+            <option>Meeting</option>
+            <option>Telefonata</option>
+            <option>Conversazione</option>
+            <option>Riunione operativa</option>
+            <option>Colloquio</option>
+            <option>Accordo commerciale</option>
+          </select>
+        </label>
+        <label>
+          Data e ora
+          <input id="meetingDate" type="datetime-local" />
+        </label>
+      </div>
+
+      <label>
+        Oggetto / tema principale
+        <input id="topic" placeholder="Es. Recap telefonata con fornitore, accordi su consegna, riunione reparto..." />
+      </label>
+
+      <div class="grid two">
+        <label>
+          Partecipanti
+          <input id="participants" placeholder="Es. Marco, Dott.ssa Rossi, Francesco..." />
+        </label>
+        <label>
+          Destinatario email
+          <input id="recipient" type="email" placeholder="nome@email.it" />
+        </label>
+      </div>
+
+      <div class="grid two">
+        <label>
+          Tono email
+          <select id="tone">
+            <option value="neutro">Neutro e chiaro</option>
+            <option value="formale">Formale</option>
+            <option value="collaborativo">Collaborativo</option>
+            <option value="tutelante">Tutelante ma corretto</option>
+            <option value="sintetico">Molto sintetico</option>
+          </select>
+        </label>
+        <label>
+          Conferma entro
+          <select id="replyWindow">
+            <option value="">Nessuna scadenza</option>
+            <option value="24 ore">24 ore</option>
+            <option value="48 ore">48 ore</option>
+            <option value="3 giorni lavorativi">3 giorni lavorativi</option>
+            <option value="5 giorni lavorativi">5 giorni lavorativi</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="textarea-head">
+        <label for="notes">Appunti o trascrizione</label>
+        <div class="actions-inline">
+          <button id="micBtn" class="ghost small" type="button">🎙️ Dettatura</button>
+          <button id="clearBtn" class="ghost small" type="button">Pulisci</button>
+        </div>
+      </div>
+      <textarea id="notes" rows="12" placeholder="Incolla qui gli appunti o la trascrizione. Puoi usare parole chiave come: Deciso:, Azione:, Scadenza:, Punto aperto:.\n\nEsempio:\nDeciso: inviare il documento corretto entro domani.\nAzione: Marco prepara il riepilogo.\nPunto aperto: attendere conferma sulla data."></textarea>
+
+      <details class="advanced">
+        <summary>Campi avanzati opzionali</summary>
+        <label>
+          Decisioni già chiare
+          <textarea id="manualDecisions" rows="3" placeholder="Una decisione per riga"></textarea>
+        </label>
+        <label>
+          Azioni da fare
+          <textarea id="manualActions" rows="3" placeholder="Una azione per riga, es. Marco invia documento entro venerdì"></textarea>
+        </label>
+        <label>
+          Punti aperti
+          <textarea id="manualOpenPoints" rows="3" placeholder="Una domanda o punto aperto per riga"></textarea>
+        </label>
+      </details>
+
+      <div class="button-row sticky-actions">
+        <button id="generateBtn" class="primary" type="button">Genera email recap</button>
+        <button id="saveBtn" class="secondary" type="button">Salva nello storico</button>
+      </div>
+    </section>
+
+    <section class="panel output-panel" aria-label="Email generata">
+      <div class="output-top">
+        <div>
+          <p class="eyebrow">Email pronta</p>
+          <h2 id="subjectPreview">Oggetto email</h2>
+        </div>
+        <span id="statusBadge" class="badge">Bozza</span>
+      </div>
+
+      <textarea id="emailOutput" class="email-output" rows="20" placeholder="Qui comparirà l'email di recap generata..."></textarea>
+
+      <div class="button-grid">
+        <button id="copyBtn" class="primary" type="button">Copia email</button>
+        <button id="mailtoBtn" class="secondary" type="button">Apri email</button>
+        <button id="downloadTxtBtn" class="secondary" type="button">Scarica TXT</button>
+        <button id="downloadEmlBtn" class="secondary" type="button">Scarica EML</button>
+      </div>
+
+      <div class="ai-helper">
+        <h3>Prompt opzionale per migliorarla con ChatGPT</h3>
+        <p>Usalo solo se vuoi far rifinire il testo mantenendo un tono professionale.</p>
+        <textarea id="promptOutput" rows="5" readonly></textarea>
+        <button id="copyPromptBtn" class="ghost" type="button">Copia prompt</button>
+      </div>
+    </section>
+
+    <section class="panel history-panel" aria-label="Storico recap">
+      <div class="history-head">
+        <div>
+          <p class="eyebrow">Archivio locale</p>
+          <h2>Storico recap</h2>
+        </div>
+        <button id="exportHistoryBtn" class="ghost small" type="button">Esporta JSON</button>
+      </div>
+      <div id="historyList" class="history-list"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
