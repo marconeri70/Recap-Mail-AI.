@@ -3,10 +3,24 @@ const $ = (id) => document.getElementById(id);
 const state = {
   deferredInstallPrompt: null,
   recognition: null,
+  quickRecognition: null,
   listening: false,
+  quickListening: false,
+  mediaRecorder: null,
+  recordedChunks: [],
+  recordedBlob: null,
+  audioObjectUrl: null,
 };
 
 const fields = {
+  sourceMode: $('sourceMode'),
+  transcriptionQuality: $('transcriptionQuality'),
+  speechContext: $('speechContext'),
+  audioFile: $('audioFile'),
+  audioPreview: $('audioPreview'),
+  transcriptionEndpoint: $('transcriptionEndpoint'),
+  transcriptDraft: $('transcriptDraft'),
+  transcriptionStatus: $('transcriptionStatus'),
   meetingType: $('meetingType'),
   meetingDate: $('meetingDate'),
   topic: $('topic'),
@@ -29,7 +43,9 @@ function init() {
   setDefaultDateTime();
   registerServiceWorker();
   bindEvents();
-  setupSpeech();
+  setupLiveTranscription();
+  setupQuickSpeech();
+  restoreSettings();
   renderHistory();
   updatePrompt();
 }
@@ -52,6 +68,21 @@ function bindEvents() {
   $('exportHistoryBtn').addEventListener('click', exportHistory);
   $('installBtn').addEventListener('click', installApp);
 
+  $('startLiveBtn').addEventListener('click', startLiveTranscription);
+  $('stopLiveBtn').addEventListener('click', stopLiveTranscription);
+  $('startRecordingBtn').addEventListener('click', startAudioRecording);
+  $('stopRecordingBtn').addEventListener('click', stopAudioRecording);
+  $('transcribeFileBtn').addEventListener('click', transcribeFileWithEndpoint);
+  $('cleanTranscriptBtn').addEventListener('click', () => {
+    fields.transcriptDraft.value = cleanTranscript(fields.transcriptDraft.value);
+    toast('Trascrizione pulita.');
+  });
+  $('insertTranscriptBtn').addEventListener('click', insertTranscriptInNotes);
+  $('downloadAudioBtn').addEventListener('click', downloadRecordedAudio);
+  fields.audioFile.addEventListener('change', handleAudioFileChange);
+  fields.transcriptionEndpoint.addEventListener('change', saveSettings);
+  fields.speechContext.addEventListener('change', saveSettings);
+
   Object.values(fields).forEach((el) => {
     if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) {
       el.addEventListener('input', updatePrompt);
@@ -69,6 +100,21 @@ function setDefaultDateTime() {
   const now = new Date();
   now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
   fields.meetingDate.value = now.toISOString().slice(0, 16);
+}
+
+function restoreSettings() {
+  fields.transcriptionEndpoint.value = localStorage.getItem('recapTranscriptionEndpoint') || '';
+  fields.speechContext.value = localStorage.getItem('recapSpeechContext') || '';
+}
+
+function saveSettings() {
+  localStorage.setItem('recapTranscriptionEndpoint', fields.transcriptionEndpoint.value.trim());
+  localStorage.setItem('recapSpeechContext', fields.speechContext.value.trim());
+}
+
+function setTranscriptionStatus(text, done = false) {
+  fields.transcriptionStatus.textContent = text;
+  fields.transcriptionStatus.classList.toggle('done', done);
 }
 
 function formatDateHuman(value) {
@@ -107,9 +153,9 @@ function extractSections(notes) {
   const openPoints = [];
   const discussed = [];
 
-  const decisionRx = /^(decisione|decisioni|deciso|abbiamo deciso|si decide|concordato|accordo)\b|\b(abbiamo concordato|è stato deciso|si è deciso|resta concordato)\b/i;
-  const actionRx = /^(azione|azioni|da fare|todo|prossimo passo|prossimi passi|follow up)\b|\b(invia|inviare|manda|mandare|prepara|preparare|chiama|chiamare|verifica|verificare|si occuperà|deve|dovrà|entro)\b/i;
-  const openRx = /^(punto aperto|punti aperti|da chiarire|dubbio|domanda)\b|\b(da confermare|resta da capire|da definire|in attesa di conferma)\b/i;
+  const decisionRx = /^(decisione|decisioni|deciso|abbiamo deciso|si decide|concordato|accordo)\b|\b(abbiamo concordato|è stato deciso|si è deciso|resta concordato|si conferma|confermiamo)\b/i;
+  const actionRx = /^(azione|azioni|da fare|todo|prossimo passo|prossimi passi|follow up)\b|\b(invia|inviare|manda|mandare|prepara|preparare|chiama|chiamare|verifica|verificare|controlla|controllare|si occuperà|deve|dovrà|entro|scadenza)\b/i;
+  const openRx = /^(punto aperto|punti aperti|da chiarire|dubbio|domanda)\b|\b(da confermare|resta da capire|da definire|in attesa di conferma|da verificare)\b/i;
 
   for (const line of lines) {
     const clean = stripPrefix(line);
@@ -120,10 +166,10 @@ function extractSections(notes) {
   }
 
   return {
-    discussed: unique(discussed).slice(0, 9),
-    decisions: unique(decisions).slice(0, 9),
-    actions: unique(actions).slice(0, 9),
-    openPoints: unique(openPoints).slice(0, 9),
+    discussed: unique(discussed).slice(0, 12),
+    decisions: unique(decisions).slice(0, 12),
+    actions: unique(actions).slice(0, 12),
+    openPoints: unique(openPoints).slice(0, 12),
   };
 }
 
@@ -212,6 +258,19 @@ function generateEmail() {
   return { subject, body };
 }
 
+function buildTranscriptionPrompt() {
+  const context = fields.speechContext.value.trim();
+  const participants = fields.participants.value.trim();
+  const topic = fields.topic.value.trim();
+  return [
+    'Trascrivi in italiano in modo fedele, correggendo punteggiatura e parole riconosciute male.',
+    'Non inventare contenuti. Mantieni decisioni, scadenze, nomi e importi esattamente come vengono detti.',
+    participants ? `Partecipanti noti: ${participants}.` : '',
+    topic ? `Tema: ${topic}.` : '',
+    context ? `Termini da rispettare: ${context}.` : '',
+  ].filter(Boolean).join(' ');
+}
+
 function updatePrompt() {
   const email = fields.emailOutput.value.trim();
   const subject = fields.subjectPreview.textContent === 'Oggetto email' ? generateSubject() : fields.subjectPreview.textContent;
@@ -245,7 +304,7 @@ function safeFileName(value) {
 }
 
 function downloadBlob(filename, content, type) {
-  const blob = new Blob([content], { type });
+  const blob = content instanceof Blob ? content : new Blob([content], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -292,6 +351,7 @@ function saveCurrentRecap() {
     subject: fields.subjectPreview.textContent,
     body: fields.emailOutput.value,
     notes: fields.notes.value,
+    transcript: fields.transcriptDraft.value,
   };
   const history = getHistory();
   history.unshift(item);
@@ -343,6 +403,7 @@ function loadHistory(id) {
   fields.participants.value = item.participants || '';
   fields.recipient.value = item.recipient || '';
   fields.notes.value = item.notes || '';
+  fields.transcriptDraft.value = item.transcript || '';
   fields.subjectPreview.textContent = item.subject || generateSubject();
   fields.emailOutput.value = item.body || '';
   fields.statusBadge.textContent = 'Caricata';
@@ -376,6 +437,7 @@ function clearForm() {
   fields.participants.value = '';
   fields.recipient.value = '';
   fields.notes.value = '';
+  fields.transcriptDraft.value = '';
   fields.manualDecisions.value = '';
   fields.manualActions.value = '';
   fields.manualOpenPoints.value = '';
@@ -402,15 +464,15 @@ function toast(message) {
   toastEl.textContent = message;
   toastEl.classList.add('show');
   clearTimeout(toastEl._timer);
-  toastEl._timer = setTimeout(() => toastEl.classList.remove('show'), 2600);
+  toastEl._timer = setTimeout(() => toastEl.classList.remove('show'), 2800);
 }
 
-function setupSpeech() {
+function setupLiveTranscription() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const micBtn = $('micBtn');
   if (!SpeechRecognition) {
-    micBtn.disabled = true;
-    micBtn.textContent = '🎙️ Non supportata';
+    $('startLiveBtn').disabled = true;
+    $('startLiveBtn').textContent = '🎙️ Live non supportato';
+    setTranscriptionStatus('Live non supportato');
     return;
   }
 
@@ -419,8 +481,81 @@ function setupSpeech() {
   state.recognition.continuous = true;
   state.recognition.interimResults = true;
 
-  let finalTranscript = '';
+  let committed = '';
   state.recognition.onresult = (event) => {
+    let interim = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript;
+      if (event.results[i].isFinal) committed += transcript.trim() + '. ';
+      else interim += transcript;
+    }
+    const base = fields.transcriptDraft.value.replace(/\n?\[In ascolto:.*?\]$/s, '').trim();
+    fields.transcriptDraft.value = `${base ? `${base}\n` : ''}${committed.trim()}${interim ? `\n[In ascolto: ${interim}]` : ''}`.trim();
+  };
+
+  state.recognition.onerror = () => {
+    setTranscriptionStatus('Errore microfono');
+    toast('Problema con il microfono o permesso negato.');
+  };
+
+  state.recognition.onend = () => {
+    if (state.listening) {
+      try {
+        state.recognition.start();
+        return;
+      } catch (_) {}
+    }
+    fields.transcriptDraft.value = fields.transcriptDraft.value.replace(/\n?\[In ascolto:.*?\]$/s, '').trim();
+    committed = '';
+    $('startLiveBtn').disabled = false;
+    $('stopLiveBtn').disabled = true;
+    setTranscriptionStatus('Fermata');
+  };
+}
+
+function startLiveTranscription() {
+  if (!state.recognition) return toast('Trascrizione live non supportata su questo browser.');
+  const ok = confirm('Avvia la trascrizione solo se hai titolo/autorizzazione a farlo. Continuare?');
+  if (!ok) return;
+  try {
+    saveSettings();
+    state.listening = true;
+    state.recognition.start();
+    $('startLiveBtn').disabled = true;
+    $('stopLiveBtn').disabled = false;
+    setTranscriptionStatus('In ascolto', true);
+    toast('Trascrizione live avviata.');
+  } catch (_) {
+    toast('Non riesco ad avviare la trascrizione live.');
+  }
+}
+
+function stopLiveTranscription() {
+  if (!state.recognition) return;
+  state.listening = false;
+  try { state.recognition.stop(); } catch (_) {}
+  $('startLiveBtn').disabled = false;
+  $('stopLiveBtn').disabled = true;
+  fields.transcriptDraft.value = fields.transcriptDraft.value.replace(/\n?\[In ascolto:.*?\]$/s, '').trim();
+  setTranscriptionStatus('Fermata');
+}
+
+function setupQuickSpeech() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const micBtn = $('micBtn');
+  if (!SpeechRecognition) {
+    micBtn.disabled = true;
+    micBtn.textContent = '🎙️ Non supportata';
+    return;
+  }
+
+  state.quickRecognition = new SpeechRecognition();
+  state.quickRecognition.lang = 'it-IT';
+  state.quickRecognition.continuous = true;
+  state.quickRecognition.interimResults = true;
+
+  let finalTranscript = '';
+  state.quickRecognition.onresult = (event) => {
     let interim = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const transcript = event.results[i][0].transcript;
@@ -430,24 +565,190 @@ function setupSpeech() {
     fields.notes.value = `${fields.notes.value.replace(/\n?\[Dettatura in corso:.*?\]$/s, '').trim()}\n${finalTranscript.trim()}${interim ? `\n[Dettatura in corso: ${interim}]` : ''}`.trim();
   };
 
-  state.recognition.onend = () => {
-    state.listening = false;
-    micBtn.textContent = '🎙️ Dettatura';
+  state.quickRecognition.onend = () => {
+    state.quickListening = false;
+    micBtn.textContent = '🎙️ Dettatura rapida';
     fields.notes.value = fields.notes.value.replace(/\n?\[Dettatura in corso:.*?\]$/s, '').trim();
     finalTranscript = '';
   };
 
   micBtn.addEventListener('click', () => {
-    if (!state.listening) {
+    if (!state.quickListening) {
       const ok = confirm('Avvia la dettatura solo se la conversazione è autorizzata e nel rispetto della privacy. Continuare?');
       if (!ok) return;
-      state.listening = true;
+      state.quickListening = true;
       micBtn.textContent = '⏹️ Ferma';
-      state.recognition.start();
+      state.quickRecognition.start();
     } else {
-      state.recognition.stop();
+      state.quickRecognition.stop();
     }
   });
+}
+
+async function startAudioRecording() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return toast('Registrazione non supportata su questo dispositivo.');
+  }
+  const ok = confirm('La registrazione audio deve essere autorizzata e conforme alla privacy. Continuare?');
+  if (!ok) return;
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    state.recordedChunks = [];
+    const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? { mimeType: 'audio/webm;codecs=opus' } : undefined;
+    state.mediaRecorder = new MediaRecorder(stream, options);
+    state.mediaRecorder.ondataavailable = event => {
+      if (event.data && event.data.size > 0) state.recordedChunks.push(event.data);
+    };
+    state.mediaRecorder.onstop = () => {
+      state.recordedBlob = new Blob(state.recordedChunks, { type: state.mediaRecorder.mimeType || 'audio/webm' });
+      stream.getTracks().forEach(track => track.stop());
+      showAudioBlob(state.recordedBlob);
+      $('downloadAudioBtn').disabled = false;
+      $('startRecordingBtn').disabled = false;
+      $('stopRecordingBtn').disabled = true;
+      setTranscriptionStatus('Audio registrato', true);
+      toast('Registrazione audio salvata nella bozza.');
+    };
+    state.mediaRecorder.start(1000);
+    $('startRecordingBtn').disabled = true;
+    $('stopRecordingBtn').disabled = false;
+    setTranscriptionStatus('Registrazione', true);
+    toast('Registrazione avviata.');
+  } catch (error) {
+    toast('Permesso microfono negato o non disponibile.');
+  }
+}
+
+function stopAudioRecording() {
+  if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
+    state.mediaRecorder.stop();
+  }
+}
+
+function showAudioBlob(blob) {
+  if (state.audioObjectUrl) URL.revokeObjectURL(state.audioObjectUrl);
+  state.audioObjectUrl = URL.createObjectURL(blob);
+  fields.audioPreview.src = state.audioObjectUrl;
+  fields.audioPreview.classList.remove('hidden');
+}
+
+function handleAudioFileChange() {
+  const file = fields.audioFile.files && fields.audioFile.files[0];
+  if (!file) return;
+  showAudioBlob(file);
+  state.recordedBlob = file;
+  $('downloadAudioBtn').disabled = false;
+  setTranscriptionStatus('File caricato', true);
+  toast('File audio caricato.');
+}
+
+function getAudioForTranscription() {
+  const uploaded = fields.audioFile.files && fields.audioFile.files[0];
+  if (uploaded) return uploaded;
+  if (state.recordedBlob) return state.recordedBlob;
+  return null;
+}
+
+async function transcribeFileWithEndpoint() {
+  const file = getAudioForTranscription();
+  const endpoint = fields.transcriptionEndpoint.value.trim();
+  if (!file) return toast('Carica o registra prima un audio.');
+  if (!endpoint) {
+    toast('Per trascrivere un file serve un endpoint AI backend.');
+    return;
+  }
+
+  try {
+    saveSettings();
+    setTranscriptionStatus('Trascrivo...', true);
+    $('transcribeFileBtn').disabled = true;
+
+    const form = new FormData();
+    form.append('file', file, file.name || `registrazione-${Date.now()}.webm`);
+    form.append('context', buildTranscriptionPrompt());
+    form.append('quality', fields.transcriptionQuality.value);
+    form.append('diarize', fields.transcriptionQuality.value === 'relatori' ? 'true' : 'false');
+
+    const response = await fetch(endpoint, { method: 'POST', body: form });
+    if (!response.ok) throw new Error(`Errore ${response.status}`);
+
+    const contentType = response.headers.get('content-type') || '';
+    let text = '';
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      text = data.text || data.transcript || data.output || '';
+      if (!text && Array.isArray(data.segments)) {
+        text = data.segments.map(s => `${s.speaker ? `${s.speaker}: ` : ''}${s.text}`).join('\n');
+      }
+    } else {
+      text = await response.text();
+    }
+
+    if (!text.trim()) throw new Error('Risposta vuota');
+    fields.transcriptDraft.value = cleanTranscript(`${fields.transcriptDraft.value}\n${text}`.trim());
+    setTranscriptionStatus('Trascritta', true);
+    toast('Trascrizione completata.');
+  } catch (error) {
+    console.error(error);
+    setTranscriptionStatus('Errore');
+    toast('Trascrizione non riuscita. Controlla endpoint/backend.');
+  } finally {
+    $('transcribeFileBtn').disabled = false;
+  }
+}
+
+function cleanTranscript(text) {
+  if (!text.trim()) return '';
+  let cleaned = text
+    .replace(/\n?\[(In ascolto|Dettatura in corso):.*?\]$/gis, '')
+    .replace(/\b(ehm+|mmm+|uhm+)\b/gi, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\s+([,.!?;:])/g, '$1')
+    .replace(/([,.!?;:])([^\s\n])/g, '$1 $2')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const replacements = parseContextTerms(fields.speechContext.value);
+  for (const term of replacements) {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    cleaned = cleaned.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), term);
+  }
+
+  cleaned = cleaned
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map(sentence => sentence.trim())
+    .filter(Boolean)
+    .map(sentence => sentence.charAt(0).toUpperCase() + sentence.slice(1))
+    .join('\n');
+
+  if (cleaned && !/[.!?]$/.test(cleaned)) cleaned += '.';
+  return cleaned;
+}
+
+function parseContextTerms(value) {
+  return (value || '')
+    .split(/[,;\n]+/)
+    .map(x => x.trim())
+    .filter(x => x.length > 2 && x.length < 50);
+}
+
+function insertTranscriptInNotes() {
+  const transcript = cleanTranscript(fields.transcriptDraft.value);
+  if (!transcript) return toast('Non c’è una trascrizione da usare.');
+  fields.transcriptDraft.value = transcript;
+  const header = `Trascrizione ${fields.sourceMode.options[fields.sourceMode.selectedIndex].text} - ${new Date().toLocaleString('it-IT')}`;
+  fields.notes.value = `${fields.notes.value.trim() ? `${fields.notes.value.trim()}\n\n` : ''}${header}\n${transcript}`;
+  updatePrompt();
+  toast('Trascrizione inserita negli appunti del recap.');
+}
+
+function downloadRecordedAudio() {
+  const file = getAudioForTranscription();
+  if (!file) return toast('Nessun audio da scaricare.');
+  const ext = file.type.includes('wav') ? 'wav' : file.type.includes('mpeg') || file.type.includes('mp3') ? 'mp3' : 'webm';
+  downloadBlob(`audio-recap-${Date.now()}.${ext}`, file, file.type || 'audio/webm');
+  toast('Audio scaricato.');
 }
 
 function registerServiceWorker() {

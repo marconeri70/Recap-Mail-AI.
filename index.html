@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0f172a" />
-  <title>Recap Mail AI - Email di riepilogo</title>
+  <title>Recap Mail AI - Trascrizione e email di riepilogo</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="app.css" />
 </head>
@@ -12,8 +12,8 @@
   <header class="app-header">
     <div>
       <p class="eyebrow">Recap Mail AI</p>
-      <h1>Trasforma conversazioni, telefonate e meeting in email di recap.</h1>
-      <p class="subtitle">Una traccia scritta chiara per decisioni, impegni, scadenze e punti aperti.</p>
+      <h1>Trascrivi conversazioni, telefonate e meeting. Poi crea l’email di recap.</h1>
+      <p class="subtitle">Una traccia scritta chiara per decisioni, impegni, scadenze e punti aperti, utile a evitare fraintendimenti.</p>
     </div>
     <button id="installBtn" class="ghost hidden" type="button">Installa app</button>
   </header>
@@ -21,8 +21,75 @@
   <main class="layout">
     <section class="panel form-panel" aria-label="Dati recap">
       <div class="notice">
-        <strong>Nota importante:</strong> usa trascrizioni o registrazioni solo se autorizzate e nel rispetto della privacy. L'app funziona in locale e non invia dati a server esterni.
+        <strong>Nota importante:</strong> registra o trascrivi solo conversazioni autorizzate e nel rispetto della privacy. Per le telefonate, una webapp non può catturare direttamente l’audio della chiamata dal telefono: usa vivavoce, un meeting registrato o carica un file audio autorizzato.
       </div>
+
+      <section class="transcription-box" aria-label="Trascrizione audio">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">Trascrizione</p>
+            <h2>Da voce a testo</h2>
+          </div>
+          <span id="transcriptionStatus" class="badge">Pronta</span>
+        </div>
+
+        <div class="grid two">
+          <label>
+            Sorgente audio
+            <select id="sourceMode">
+              <option value="meeting-live">Meeting live dal microfono</option>
+              <option value="phone-speaker">Telefonata in vivavoce</option>
+              <option value="conversation">Conversazione di persona</option>
+              <option value="uploaded-audio">File audio / video registrato</option>
+            </select>
+          </label>
+          <label>
+            Qualità desiderata
+            <select id="transcriptionQuality">
+              <option value="standard">Standard</option>
+              <option value="accurata">Accurata con contesto</option>
+              <option value="relatori">Con distinzione relatori se disponibile</option>
+            </select>
+          </label>
+        </div>
+
+        <label>
+          Nomi, termini tecnici o parole difficili
+          <textarea id="speechContext" rows="3" placeholder="Es. Marco Neri, Dott.ssa Albanese, SKF, Robot 7, Aquipta, Cassino, scadenza entro venerdì..."></textarea>
+        </label>
+
+        <div class="grid two">
+          <label>
+            Carica audio o video
+            <input id="audioFile" type="file" accept="audio/*,video/mp4,video/webm" />
+          </label>
+          <label>
+            Endpoint AI opzionale
+            <input id="transcriptionEndpoint" placeholder="Es. https://tuo-dominio.it/api/transcribe" />
+          </label>
+        </div>
+
+        <audio id="audioPreview" class="audio-preview hidden" controls></audio>
+
+        <div class="button-row transcription-actions">
+          <button id="startLiveBtn" class="primary" type="button">🎙️ Trascrivi live</button>
+          <button id="stopLiveBtn" class="secondary" type="button" disabled>⏹️ Ferma live</button>
+          <button id="startRecordingBtn" class="secondary" type="button">● Registra audio</button>
+          <button id="stopRecordingBtn" class="secondary" type="button" disabled>■ Stop registrazione</button>
+          <button id="transcribeFileBtn" class="secondary" type="button">Trascrivi file con AI</button>
+        </div>
+
+        <div class="textarea-head transcript-head">
+          <label for="transcriptDraft">Trascrizione grezza / corretta</label>
+          <div class="actions-inline">
+            <button id="cleanTranscriptBtn" class="ghost small" type="button">Pulisci testo</button>
+            <button id="insertTranscriptBtn" class="ghost small" type="button">Usa nel recap</button>
+            <button id="downloadAudioBtn" class="ghost small" type="button" disabled>Scarica audio</button>
+          </div>
+        </div>
+        <textarea id="transcriptDraft" rows="9" placeholder="Qui comparirà la trascrizione live o quella ottenuta dal file audio. Poi premi “Usa nel recap”."></textarea>
+        <p class="helper-text">Per una telefonata: metti la chiamata in vivavoce e avvia “Trascrivi live”, oppure carica una registrazione autorizzata. Per meeting lunghi è consigliato il backend AI.</p>
+      </section>
 
       <div class="grid two">
         <label>
@@ -82,13 +149,18 @@
       </div>
 
       <div class="textarea-head">
-        <label for="notes">Appunti o trascrizione</label>
+        <label for="notes">Appunti o trascrizione da usare per il recap</label>
         <div class="actions-inline">
-          <button id="micBtn" class="ghost small" type="button">🎙️ Dettatura</button>
+          <button id="micBtn" class="ghost small" type="button">🎙️ Dettatura rapida</button>
           <button id="clearBtn" class="ghost small" type="button">Pulisci</button>
         </div>
       </div>
-      <textarea id="notes" rows="12" placeholder="Incolla qui gli appunti o la trascrizione. Puoi usare parole chiave come: Deciso:, Azione:, Scadenza:, Punto aperto:.\n\nEsempio:\nDeciso: inviare il documento corretto entro domani.\nAzione: Marco prepara il riepilogo.\nPunto aperto: attendere conferma sulla data."></textarea>
+      <textarea id="notes" rows="12" placeholder="Incolla qui appunti o trascrizione. Puoi usare parole chiave come: Deciso:, Azione:, Scadenza:, Punto aperto:.
+
+Esempio:
+Deciso: inviare il documento corretto entro domani.
+Azione: Marco prepara il riepilogo.
+Punto aperto: attendere conferma sulla data."></textarea>
 
       <details class="advanced">
         <summary>Campi avanzati opzionali</summary>
@@ -121,7 +193,7 @@
         <span id="statusBadge" class="badge">Bozza</span>
       </div>
 
-      <textarea id="emailOutput" class="email-output" rows="20" placeholder="Qui comparirà l'email di recap generata..."></textarea>
+      <textarea id="emailOutput" class="email-output" rows="20" placeholder="Qui comparirà l’email di recap generata..."></textarea>
 
       <div class="button-grid">
         <button id="copyBtn" class="primary" type="button">Copia email</button>
